@@ -2,7 +2,7 @@
 
 Claude-powered CLI for data engineers: semantic review, explanation and documentation of the things DEs actually ship — SQL, dbt, Airflow, Spark, warehouse and cloud configs.
 
-> **Status: v0.1 (alpha).** Working CLI + 2 full agent prompts; the other 14 agents run from outlines and are being expanded.
+> **Status: v0.1 (alpha).** Working CLI and 16 full agent prompts (researched against current docs, independently reviewed). Prompts are not yet validated against real-world files at scale: feedback and PRs welcome.
 
 ## Idea
 One `de` command, many **specialist agents**, each scoped to what a senior DE checks for that tool (e.g. the AWS agent knows Glue/EMR/Kinesis/Athena — not Route 53).
@@ -34,11 +34,15 @@ Optional config: `de config init` -> `~/.dataeng/config.yaml` (model, warehouse/
 - `src/dataeng_tools/` — CLI (`cli.py`), agent loader (`agents.py`), tool detection (`detect.py`), config, LLM wrapper
 - `tests/` — offline tests (LLM mocked); `examples/` — demo inputs
 - `docs/DESIGN.md` — architecture, modes, severity framework, agent interaction rules
-- `src/dataeng_tools/prompts/agents/*.md` — full system prompts (`sql-agent`, `aws-de-agent`)
-- `src/dataeng_tools/prompts/agents/*.outline.md` — outlines for the remaining agents (python, dbt, airflow, dagster, snowflake, bigquery, clickhouse, redshift, gcp, azure, terraform, docker, incident, data-quality)
+- `src/dataeng_tools/prompts/agents/*.md` — the 16 agent system prompts: sql, python, dbt, airflow, dagster, snowflake, bigquery, clickhouse, redshift, aws-de, gcp-de, azure-de, terraform-de, docker-de, incident, data-quality
 
 ## Contributing
-Prompts are plain Markdown — PRs that sharpen a check, add a dialect gotcha, or expand an outline into a full prompt are the most valuable contribution.
+Prompts are plain Markdown — PRs that sharpen a check, add a dialect gotcha, or tighten a prompt that over- or under-reports are the most valuable contribution.
 
 ## License
 MIT
+
+## Security notes
+- File contents are sent to the Anthropic API. Don't review files containing secrets or data you can't share.
+- Input is wrapped in a delimited block and every prompt tells the model to treat it as untrusted data. Output is advisory: **don't use it as a pass/fail gate** in CI; a crafted file may still influence it.
+- Prefer `ANTHROPIC_API_KEY` over storing the key in `~/.dataeng/config.yaml`.

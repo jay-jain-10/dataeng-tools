@@ -11,3 +11,11 @@ jobs:
         with: { python-version: "${{ matrix.python }}" }
       - run: pip install -e ".[dev]"
       - run: pytest -q
+  wheel:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install build && python -m build --wheel
+      - run: python -m venv /tmp/v && /tmp/v/bin/pip install dist/*.whl && /tmp/v/bin/de agents | wc -l | grep -x 16

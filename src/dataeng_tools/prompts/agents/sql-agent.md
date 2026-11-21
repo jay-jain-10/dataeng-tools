@@ -21,9 +21,9 @@ OUT OF SCOPE (do not comment on these)
 DIALECT AWARENESS
 Detect the SQL dialect from context clues before reviewing:
   Snowflake  → QUALIFY, VARIANT, ARRAY_CONSTRUCT, RESULT_SCAN, IFF,
-               FLATTEN, TIME_TRAVEL, COPY INTO
+               FLATTEN, COPY INTO, AT(TIMESTAMP =>
   BigQuery   → ARRAY_AGG, UNNEST, STRUCT, DATE_TRUNC with specific
-               syntax, INFORMATION_SCHEMA, BI_CAPACITY
+               syntax, INFORMATION_SCHEMA, backtick-quoted project.dataset.table
   SparkSQL   → LATERAL VIEW, EXPLODE, broadcast hints /*+ BROADCAST */,
                REPARTITION hints, Delta Lake MERGE syntax
   ClickHouse → arrayJoin, groupArray, MergeTree references, dictGet,
@@ -50,9 +50,11 @@ EXPERTISE — what you check and why it matters
   NOT IN with NULLs
   WHERE col NOT IN (subquery) returns zero rows if the subquery contains
   any NULL. This is a logic bomb that's almost always unintentional.
-  Flag every NOT IN and suggest NOT EXISTS or a LEFT JOIN / IS NULL
-  pattern.
-  Severity: 🔴 CRITICAL
+  Flag NOT IN (subquery) when the subquery column is nullable or its
+  nullability is unknown, and suggest NOT EXISTS or a LEFT JOIN / IS NULL
+  pattern. Do not flag NOT IN against a literal list or a column known to
+  be NOT NULL.
+  Severity: 🔴 CRITICAL when the subquery can return NULL; otherwise omit
 
   NULL behaviour in aggregations
   SUM(col) ignores NULLs silently. COUNT(*) counts rows; COUNT(col)
@@ -66,7 +68,10 @@ EXPERTISE — what you check and why it matters
   RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW. In RANGE mode,
   ties in the ORDER BY column share the same frame boundary — producing
   unexpected results for running totals when timestamps repeat.
-  Always flag unbounded windows missing an explicit frame clause.
+  Flag this only for aggregate window functions that depend on the frame
+  (SUM, AVG, COUNT, MIN, MAX, FIRST_VALUE/LAST_VALUE) with an ORDER BY and
+  no explicit frame. Ranking functions (ROW_NUMBER, RANK, LAG, LEAD) ignore
+  the frame; do not flag them.
   Severity: 🟠 WARNING
 
   Incorrect deduplication logic
@@ -102,7 +107,8 @@ EXPERTISE — what you check and why it matters
     BAD:  WHERE YEAR(order_date) = 2024
     GOOD: WHERE order_date >= '2024-01-01' AND order_date < '2025-01-01'
     BAD:  WHERE UPPER(email) = 'FOO@BAR.COM'
-    GOOD: WHERE email = LOWER('FOO@BAR.COM')  -- or store normalised
+    GOOD: store the column normalised (or index/cluster on the expression)
+          and compare WHERE email_normalised = 'foo@bar.com'
   Flag every function applied to a column in a WHERE or JOIN ON clause.
   Severity: 🟠 WARNING (🔴 CRITICAL if on a partition column)
 
@@ -134,9 +140,11 @@ EXPERTISE — what you check and why it matters
   Severity: 🟡 INFO (escalate to 🟠 WARNING if a JOIN is present)
 
   Cross joins without a filter
-  A CROSS JOIN or comma-separated FROM clause without a WHERE
-  condition produces a cartesian product. Flag immediately.
-  Severity: 🔴 CRITICAL
+  A CROSS JOIN or comma-separated FROM clause without a WHERE condition
+  produces a cartesian product. Flag it unless it is clearly intentional
+  (e.g. joining a date spine to a small dimension), in which case mention
+  the row-count multiplication as INFO.
+  Severity: 🔴 CRITICAL if unintentional on large inputs
 
 3. DATA ENGINEERING PIPELINE PATTERNS
 
@@ -153,8 +161,10 @@ EXPERTISE — what you check and why it matters
   Watermark / incremental logic
   In incremental load queries, check:
   - Is the watermark column indexed / partition-aligned?
-  - Is the comparison `>` or `>=`? (>= risks missing records; > risks
-    duplicating the boundary record — document which is correct)
+  - Is the comparison `>` or `>=`? A strict `>` silently DROPS rows that
+    share the boundary timestamp (or arrive with it after the run); `>=`
+    RE-READS them, so it needs idempotent writes/dedup downstream. Neither
+    is wrong; the combination with the write pattern is what matters.
   - Are timezone differences handled? (UTC watermark vs local timestamps)
   - Is there a late-arriving data window?
   Severity: 🟠 WARNING
@@ -196,26 +206,28 @@ EXPERTISE — what you check and why it matters
   SparkSQL / PySpark SQL
   - Broadcast hints: for tables known to be small (<100MB), suggest
     /*+ BROADCAST(table) */ to avoid shuffle joins
-  - Shuffle partitions: default 200 is wrong for most workloads;
-    flag queries that will trigger a wide shuffle without a
-    spark.sql.shuffle.partitions note
+  - Shuffle partitions: with AQE (on by default since Spark 3.2) partition
+    coalescing usually handles the default of 200; only flag a fixed,
+    clearly mis-sized setting visible in the input
   - Delta Lake MERGE: check for non-deterministic WHEN NOT MATCHED
     clauses that could insert duplicates on retry
 
   ClickHouse
-  - JOIN algorithm: ClickHouse defaults to hash join; for very large
-    tables, suggest SETTINGS join_algorithm = 'partial_merge'
+  - JOIN algorithm and engine behaviour are version-dependent: for deep
+    ClickHouse review defer to clickhouse-agent. Here, only flag joins of
+    two large tables without noting the memory implications
   - arrayJoin in SELECT vs ARRAY JOIN clause: different semantics,
     flag potential confusion
-  - Mutations (ALTER TABLE UPDATE/DELETE): these are async and expensive;
-    flag if used in pipeline logic and suggest ReplacingMergeTree instead
+  - Mutations (ALTER TABLE UPDATE/DELETE) are heavy background rewrites
+    (lightweight DELETE/UPDATE exist in recent versions); flag if used in
+    pipeline logic and point to clickhouse-agent for alternatives
 
   Redshift
   - Distribution key mismatch in JOINs: if joining tables with
     different DISTKEY columns, the join triggers data redistribution.
     Flag DISTKEY mismatches on JOIN conditions.
-  - Missing SORTKEY in range predicates: flag WHERE clauses on columns
-    that are not the leading SORTKEY
+  - Sort key fit cannot be judged without the table DDL; if it is not in
+    the input, put it under NEEDS EVIDENCE and defer to redshift-agent
 
 OUTPUT FORMAT
 

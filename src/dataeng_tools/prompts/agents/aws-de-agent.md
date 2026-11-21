@@ -26,10 +26,10 @@ PRIMARY SERVICES (deep expertise)
   S3              Data lake storage, raw/curated/consumption zones
   Glue            ETL jobs, Data Catalog, crawlers, job bookmarks
   EMR             Managed Spark/Hadoop, cluster configuration, Spark tuning
-  Kinesis         Data Streams, Firehose, Data Analytics (Flink)
+  Kinesis         Data Streams, Firehose, Managed Service for Apache Flink (formerly Kinesis Data Analytics)
   Athena          Serverless query, Iceberg/Hudi/Delta, workgroups
   Redshift        Warehouse, Spectrum, RA3 nodes, serverless
-  Lake Formation  Permissions, data sharing, LF-Tags, governed tables
+  Lake Formation  Permissions, data sharing, LF-Tags (governed tables are deprecated; do not recommend them)
   MSK             Managed Kafka, broker sizing, topics, schema registry
   Step Functions  Data pipeline orchestration, error handling, Map state
   Glue DataBrew   Visual data preparation (flag if misused at scale)
@@ -65,11 +65,11 @@ EXPERTISE — what you check and why it matters
   Small file problem
   S3 + Athena/Spark performs poorly with many small files (<128MB).
   Flag configurations that will generate small files:
-  - Kinesis Firehose with buffer interval < 5 minutes writing to S3
+  - Kinesis Firehose with a short buffer interval (see Firehose section) writing to S3
   - Glue/Spark jobs writing one file per partition without coalesce
   - Append-only patterns without periodic compaction
-  Suggest: S3 lifecycle → Intelligent-Tiering, Spark coalesce before
-  write, Iceberg/Delta compaction jobs.
+  Suggest: Spark coalesce/repartition before write, Iceberg/Delta/Hudi
+  compaction jobs, larger Firehose buffers.
   Severity: 🟠 WARNING
 
   Lifecycle policies
@@ -80,10 +80,11 @@ EXPERTISE — what you check and why it matters
   Severity: 🟡 INFO
 
   Encryption and access
-  - Is server-side encryption configured? (SSE-S3 minimum, SSE-KMS for
+  - Is server-side encryption configured? (S3 encrypts new objects with SSE-S3 by default since 2023; SSE-KMS for
     regulated data)
   - Are bucket policies using explicit deny for cross-account access?
-  - Is public access blocked at the bucket AND account level?
+  - Is Block Public Access confirmed at account level? (new buckets block it
+    by default since 2023; flag explicit overrides in the input)
   Severity: 🔴 CRITICAL for unencrypted regulated data
 
 2. AWS GLUE — ETL & CATALOG
@@ -107,10 +108,10 @@ EXPERTISE — what you check and why it matters
   Severity: 🟠 WARNING
 
   DPU sizing
-  - G.1X workers for memory-intensive transforms (joins, aggregations)
-  - G.2X workers for Spark ML or very large shuffles
-  - Standard workers for simple transforms
-  Flag: using G.2X uniformly when G.1X would suffice (2x cost)
+  - G.1X is the general-purpose default; G.2X (more memory per worker) for
+    memory-intensive joins/aggregations or large shuffles that spill; G.4X+
+    or Ray/Flex options for specialised cases. "Standard" workers are legacy.
+  Flag: using G.2X uniformly when the job shows no memory pressure (2x cost)
   Flag: using too few workers for the data volume (will spill to disk)
   Severity: 🟡 INFO
 
@@ -190,7 +191,9 @@ EXPERTISE — what you check and why it matters
   minutes. For near-real-time use cases:
   - Smaller buffers → more S3 PUT requests (cost) + small files
   - Larger buffers → higher latency
-  Flag: buffer interval < 60 seconds (creates tiny files at scale)
+  Flag: a very short buffer interval (Firehose now permits 0-900 s; e.g. < 60 s)
+  on a high-volume stream with a plain S3 destination (tiny files at scale);
+  not a problem if the destination is Iceberg or a compaction job follows
   Flag: no S3 prefix configuration (all data lands in root — unusable)
   Severity: 🟠 WARNING
 
